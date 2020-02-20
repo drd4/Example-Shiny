@@ -1,0 +1,606 @@
+library(shiny)
+library(shinythemes)
+library(dplyr)
+library(DBI)
+library(odbc)
+library(feather)
+library(DT)
+library(tidyverse)
+library(shinyWidgets)
+library(forcats)
+library(gtools)
+library(ggplot2)
+library(plotly)
+library(ggthemes)
+
+#Import and Clean all DF's
+Player_data <- read_feather("Player_data.feather")
+Scout_Follows <- read_feather("Scout_Follows.feather")
+Hitter_Workout_data <- read_feather("Hitter_Workout_data.feather")
+Pitcher_Workout_data <- read_feather("Pitcher_Workout_data.feather")
+SG_data <- read_feather("SG_data.feather")
+Rap_data <- read_feather("Rap_data.feather")
+TM_Live_data <- read_feather("TM_Live_data.feather")
+TM_BP_data <- read_feather("TM_BP_data.feather")
+BM_data <- read_feather("BM_data.feather")
+TM_Pitcher_data <- read_feather("TM_Pitcher_data.feather")
+Percentile_Count <- read_feather("Percentile_Count.feather")
+Percentile_Count$J2 <- ordered(Percentile_Count$J2, levels = c("2018", "2019", "2020", "2021", "2022", "2023", "2024"))
+Percentile_Count$Pos <- ordered(Percentile_Count$Pos, levels = c("C", "IF", "OF", "DH", "RHP", "LHP" ))
+Percentile_Count$Country <- ordered(Percentile_Count$Country, levels = c("Aruba", "Bahamas", "Brazil",  "Colombia", "Cuba", "Curacao", "Dominican Republic","Mexico", "Nicaragua", "Panama", "Venezuela" ))
+
+#Merge all dataframes
+mergefirst <- Reduce(function(x,y) merge(x, y, by = c("Player", "Date Recorded", "Age Recorded"), all = TRUE), list(BM_data, Hitter_Workout_data, Pitcher_Workout_data, Rap_data,  SG_data, TM_BP_data, TM_Live_data, TM_Pitcher_data))
+intl_df <- Reduce(function(x,y) merge(x, y, by = c("Player"), all = TRUE), list(mergefirst, Player_data, Scout_Follows))
+
+#Set levels etc
+intl_df <- intl_df %>% mutate_at(vars("J2"), ~ as.factor(.))
+intl_df$J2 <- ordered(intl_df$J2, levels = c("2018", "2019", "2020", "2021", "2022", "2023", "2024"))
+intl_df$`Overall Interest` <- round(intl_df$`Overall Interest`,1)
+intl_df$Country <- ordered(intl_df$Country, levels = c("Aruba",  "Bahamas", "Brazil",  "Colombia", "Cuba", "Curacao", "Dominican Republic", "Mexico", "Nicaragua", "Panama",  "Venezuela" ))
+intl_df$Pos <- ordered(intl_df$Pos, levels = c("C", "IF", "OF", "DH", "RHP", "LHP" ))
+intl_df <- intl_df %>% mutate(`Date Recorded` = fct_infreq(`Date Recorded`))
+
+
+#Player Compare 
+Player_Compare <- intl_df
+Player_Names <- as.character(Player_Compare$Player)
+Variables <- names(Player_Compare)
+Player_Compare <- Player_Compare %>% mutate(`Date Recorded` = fct_infreq(`Date Recorded`))
+
+#Kernal Density Data
+dat <- read_feather("dat.feather")
+nms <- colnames(dat)
+nms.numeric<-nms[sapply(dat,is.numeric)]
+dat$Pos <- ordered(dat$Pos, levels = c("C", "IF",  "OF", "DH", "RHP", "LHP"))
+dat$J2 <- ordered(dat$J2, levels = c("2018", "2019", "2020", "2021", "2022", "2023", "2024"))
+
+#Remove Australia, USA, Japan, Germany
+dat$Country <- ordered(dat$Country, levels = c("Aruba", "Bahamas", "Brazil",  "Colombia", "Cuba", "Curacao", "Dominican Republic", "Mexico", "Nicaragua", "Panama",  "Venezuela" ))
+
+#Progression Graphic
+plot_df <- read_feather("plot_df.feather")
+Variables1 <- names(plot_df)
+
+#Metric Counts for Percentile Context
+P_Count <- read_feather("P_Count.feather")
+
+
+## UI International Scouting Application 
+ui <- navbarPage("Leaderboard App", header = "", theme = shinytheme("united"),
+                 tabPanel("International",
+                          tabsetPanel(
+                            tabPanel("Leaderboard",
+                                     sidebarLayout(
+                                       sidebarPanel(
+                                         
+                                         awesomeCheckboxGroup("cond_bio1", "Select Column Groups to Display:",
+                                                              choices = c("Player Data", "Scout Follows",  "Hitter Rapsodo Data", "Hitter TM BP Data", "Hitter TM Live Data", 
+                                                                          "Blast Motion Data", "Hitter Workout Data", "Speed Gates","Pitcher TM Data", "Pitcher Workout Data"  ),
+                                                              selected = list("Player Data"), status = "danger"),
+                                         downloadBttn("ldown", label = "Download Table", style = "gradient", color = "default", size = "sm"),
+                                         uiOutput("checkbox_bio1"),
+                                         width = 2),
+                                       mainPanel(DT::dataTableOutput("playertable"), width = 10)
+                                     )),
+                            tabPanel("Metric Percentiles",
+                                     tabsetPanel(
+                                       tabPanel("Metric Percentiles",
+                                                sidebarLayout(
+                                                  sidebarPanel(
+                                                    awesomeCheckboxGroup("cond_bio4", "Select Columns Groups to Display:",
+                                                                         choices = c("Player Data", "Hitter Rap Per%","Hitter TM BP Per%", "Hitter TM Live Per%",  "BM Per%", "Hitter Workout Per%", "Speed Gate Per%", "Pitcher TM Per%", "Pitcher Workout Per%"),
+                                                                         selected = list("Player Data"), status = "danger"),
+                                                    downloadBttn("pdown", label = "Download Table", style = "gradient", color = "default", size = "sm"),
+                                                    uiOutput("checkbox_bio4"),
+                                                    width = 2),
+                                                  mainPanel(
+                                                    DT::dataTableOutput("mytable7"), width = 10)
+                                                )),
+                                       tabPanel("Metric Count for Context",
+                                                mainPanel(DT::dataTableOutput("mytable44"), width = 10)))),
+                            tabPanel("Player Compare Tool",
+                                     sidebarLayout(
+                                       sidebarPanel(
+                                         condition = 'input.dataset === "Player_Compare"',
+                                         selectizeInput("choose", "Select Players to Compare", choices =  sort(Player_Compare$Player),  multiple = TRUE),
+                                         awesomeCheckboxGroup("cond_bio2", "Select Column Groups to Display:",
+                                                              choices = c("Player Data", "Scout Follows",  "Hitter Rapsodo Data", "Hitter TM BP Data", "Hitter TM Live Data", 
+                                                                          "Blast Motion Data", "Hitter Workout Data", "Speed Gates","Pitcher TM Data", "Pitcher Workout Data"  ),
+                                                              selected = list("Player Data"), status = "danger"),
+                                         uiOutput("checkbox_bio2"),
+                                         width = 2),
+                                       mainPanel(
+                                         id = 'dataset',
+                                         DT::dataTableOutput("mytable5"),
+                                         width = 10)
+                                     )),
+                            tabPanel("Player Progression/Compare Graphic",
+                                     sidebarLayout(
+                                       sidebarPanel(
+                                         selectInput("choose1", "Select a Player(s)", choices = Player_Names, multiple = TRUE),
+                                         selectInput("choose3", "Select Y Axis", choices = Variables1)
+                                       ),
+                                       mainPanel(
+                                         plotlyOutput("graphic", height = "900px")
+                                       ))),
+                            tabPanel("Distribution Graphic",
+                                     sidebarLayout(
+                                       sidebarPanel(
+                                         selectInput('x', 'Select X Variable', choices = nms.numeric, selected = nms.numeric[1]),
+                                         #sliderInput('bandwidth', 'Bandwith',min = 0.1, max = 10, value = 1),
+                                         selectInput('color', 'Select Color Group', choices = c("None", "Country", "J2", "Pos"), selected = "None"),
+                                         selectInput("player", "Select Player to Plot", choices = dat$Player),
+                                         #sliderInput('plotHeight', 'Height of Plot',min = 100, max = 2000, value = 600),
+                                         sliderInput('alpha', 'Transparency',min = 100, max = 1000, value = 700)
+                                       ),
+                                       mainPanel(
+                                         plotlyOutput('trendPlot', height = "900px"))))
+                          
+                          )))
+                
+
+server <- function(input, output, session){
+  
+  #Kernal
+  dataset <- reactive({
+    dat
+  })
+  
+  output$trendPlot <- renderPlotly({
+    xyz <- dat %>% filter(Player == input$player) %>% select(input$x)
+    xyz <- as.numeric(unlist(xyz))
+    if (input$color=="None") {
+      p <- ggplot(dataset(), aes_string(x = input$x)) +
+        geom_density(alpha=input$alpha/1000)}
+    else {
+      p <- ggplot(dataset(), aes_string(x = input$x,fill = input$color)) +
+        geom_density(alpha=input$alpha/1000)}
+    a <- p + geom_vline(aes(xintercept = xyz, color = "Player Selected"))
+    a <- a + theme_gdocs()
+    a <- a + ggtitle(paste(input$x, "Distribution"))
+    ggplotly(a, autosize=TRUE)
+    
+  })
+  
+  
+  #Progression
+  output$graphic <- renderPlotly({
+    xx <- plot_df[plot_df$Player %in% input$choose1 ,]
+    p <- ggplot(xx, aes_string(x = "Age.Recorded", y = input$choose3)) + geom_point(aes(colour = factor(Player)))
+    p <- p + theme_gdocs()
+    p <- p + ggtitle(paste("Date Recorded vs", input$choose3))
+    # p <- p + geom_vline(aes(x), data = lines)
+    ggplotly(p)
+  })
+  
+  
+  #LEADERBOARD TAB CHECKBOX 
+  output$checkbox_bio1 <- renderUI({
+    if("Player Data" %in% input$cond_bio1){Player <- Player_data_columns}
+    if("Scout Follows" %in% input$cond_bio1){Scout <- Scout_Follows_columns}
+    if("Hitter Workout Data" %in% input$cond_bio1){Workout_h <- Hitter_Workout_columns}
+    if("Pitcher Workout Data" %in% input$cond_bio1){Workout_p <- Pitcher_Workout_columns}
+    if("Pitcher TM Data" %in% input$cond_bio1){TM_p <- TM_Pitcher_columns}
+    if("Hitter Rapsodo Data" %in% input$cond_bio1){Rapsodo <- RAP_columns}
+    if("Blast Motion Data" %in% input$cond_bio1){BM <- BM_columns}
+    if("Hitter TM BP Data" %in% input$cond_bio1){TMB <- TM_BP_columns}
+    if("Hitter TM Live Data" %in% input$cond_bio1){TML <- TM_Live_columns}
+    if("Speed Gates" %in% input$cond_bio1){SG <- SG_columns}
+    awesomeCheckboxGroup("checkbox_bio1", "Select Columns to Display:",
+                         choices = c( "Age Recorded", Player_data_columns, Scout_Follows_columns, RAP_columns, TM_BP_columns, TM_Live_columns,  BM_columns, Hitter_Workout_columns, SG_columns, Pitcher_Workout_columns, TM_Pitcher_columns),
+                         selected = c("Date Recorded", if(exists("Player")){Player}, if(exists("Scout")){Scout}, if(exists("Workout_h")){Workout_h}, if(exists("Workout_p")){Workout_p}, if(exists("TM_p")){TM_p},if(exists("Rapsodo")){Rapsodo}, if(exists("BM")){BM},
+                                      if(exists("SG")){SG}, if(exists("TML")){TML}, if(exists("TMB")){TMB}), status = "danger")
+  })
+  
+  
+  #lEADERBOARD TABLE
+  output$playertable <- DT::renderDataTable({
+    datatable(intl_df[, c("Player",   "Player Type","Date Recorded", input$checkbox_bio1), drop = TRUE],
+              filter = 'top', extensions = c("FixedColumns"), 
+              options = list(autoWidth = TRUE, scrollX = "TRUE", scrollY = "850px", pageLength = 100, fixedColumns = list(leftColumns = 2),
+                             columnDefs = list(list(className = 'dt-center', targets = 2:(ncol(intl_df[,c("GC Profile", "Player",  input$checkbox_bio1)])-1))),  lengthMenu = c(25, 50, 100, 250)),
+              escape = FALSE, rownames = FALSE, class = 'cell-border display center nowrap compact') %>%
+      formatPercentage(columns = c(if("RAP Weak EV %"  %in% input$checkbox_bio1){"RAP Weak EV %" },
+                                   if("Rap Launch %"  %in% input$checkbox_bio1){"Rap Launch %" },
+                                   if("RAP Barrel %"  %in% input$checkbox_bio1){"RAP Barrel %" },
+                                   if("RAP Ground Ball %"  %in% input$checkbox_bio1){"RAP Ground Ball %" },
+                                   if("RAP Line Drive %"  %in% input$checkbox_bio1){"RAP Line Drive %" },
+                                   if("RAP Fly Ball %"  %in% input$checkbox_bio1){"RAP Fly Ball %" },
+                                   if("RAP Pop Up %"  %in% input$checkbox_bio1){"RAP Pop Up %" },
+                                   if("RAP LF Rate"  %in% input$checkbox_bio1){"RAP LF Rate" },
+                                   if("RAP Launch %"  %in% input$checkbox_bio1){"RAP Launch %" },
+                                   if("RAP CF Rate"  %in% input$checkbox_bio1){"RAP CF Rate" },
+                                   if("RAP RF Rate"  %in% input$checkbox_bio1){"RAP RF Rate" },
+                                   if("TM BP Launch %" %in% input$checkbox_bio1){"TM BP Launch %"},
+                                   if("TM BP Barrel %" %in% input$checkbox_bio1){"TM BP Barrel %"},
+                                   if("TM BP GB %" %in% input$checkbox_bio1){"TM BP GB %"},
+                                   if("TM BP Weak EV %" %in% input$checkbox_bio1){"TM BP Weak EV %"},
+                                   if("TM BP LD %" %in% input$checkbox_bio1){"TM BP LD %"},
+                                   if("TM BP Fly Ball %" %in% input$checkbox_bio1){"TM BP Fly Ball %"},
+                                   if("TM BP Pop Up %" %in% input$checkbox_bio1){"TM BP Pop Up %"},
+                                   if("TM BP LF %" %in% input$checkbox_bio1){"TM BP LF %"},
+                                   if("TM BP CF %" %in% input$checkbox_bio1){"TM BP CF %"},
+                                   if("TM BP RF %" %in% input$checkbox_bio1){"TM BP RF %"},
+                                   if("TM Live Swing %" %in% input$checkbox_bio1){"TM Live Swing %"},
+                                   if("TM Live Chase %" %in% input$checkbox_bio1){"TM Live Chase %"},
+                                   if("TM Live inZ Swing %" %in% input$checkbox_bio1){"TM Live inZ Swing %"},
+                                   if("TM Live Contact %" %in% input$checkbox_bio1){"TM Live Contact %"},
+                                   if("TM Live SwStr %" %in% input$checkbox_bio1){"TM Live SwStr %"},
+                                   if("TM Live InZ Contact %" %in% input$checkbox_bio1){"TM Live InZ Contact %"},
+                                   if("FF Zone Pct" %in% input$checkbox_bio1){"FF Zone Pct"},
+                                   if("FF Whiff Rate" %in% input$checkbox_bio1){"FF Whiff Rate"},
+                                   if("FF ISO Whiff Rate" %in% input$checkbox_bio1){"FF ISO Whiff Rate"},
+                                   if("FF Zone ISO Whiff Rate" %in% input$checkbox_bio1){"FF Zone ISO Whiff Rate"},
+                                   if("FT Zone Pct" %in% input$checkbox_bio1){"FT Zone Pct"},
+                                   if("FT Whiff Rate" %in% input$checkbox_bio1){"FT Whiff Rate"},
+                                   if("FT ISO Whiff Rate" %in% input$checkbox_bio1){"FT ISO Whiff Rate"},
+                                   if("FT Zone ISO Whiff Rate" %in% input$checkbox_bio1){"FT Zone ISO Whiff Rate"},
+                                   if("FC Zone Pct" %in% input$checkbox_bio1){"FC Zone Pct"},
+                                   if("FC Whiff Rate" %in% input$checkbox_bio1){"FC Whiff Rate"},
+                                   if("FC ISO Whiff Rate" %in% input$checkbox_bio1){"FC ISO Whiff Rate"},
+                                   if("FC Zone ISO Whiff Rate" %in% input$checkbox_bio1){"FC Zone ISO Whiff Rate"},
+                                   if("CU Zone Pct" %in% input$checkbox_bio1){"CU Zone Pct"},
+                                   if("CU Whiff Rate" %in% input$checkbox_bio1){"CU Whiff Rate"},
+                                   if("CU ISO Whiff Rate" %in% input$checkbox_bio1){"CU ISO Whiff Rate"},
+                                   if("CU Zone ISO Whiff Rate" %in% input$checkbox_bio1){"CU Zone ISO Whiff Rate"},
+                                   if("SL Zone Pct" %in% input$checkbox_bio1){"SL Zone Pct"},
+                                   if("SL Whiff Rate" %in% input$checkbox_bio1){"SL Whiff Rate"},
+                                   if("SL ISO Whiff Rate" %in% input$checkbox_bio1){"SL ISO Whiff Rate"},
+                                   if("SL Zone ISO Whiff Rate" %in% input$checkbox_bio1){"SL Zone ISO Whiff Rate"},
+                                   if("CH Zone Pct" %in% input$checkbox_bio1){"CH Zone Pct"},
+                                   if("CH Whiff Rate" %in% input$checkbox_bio1){"CH Whiff Rate"},
+                                   if("CH ISO Whiff Rate" %in% input$checkbox_bio1){"CH ISO Whiff Rate"},
+                                   if("CH Zone ISO Whiff Rate" %in% input$checkbox_bio1){"CH Zone ISO Whiff Rate"},
+                                   if("FS Zone Pct" %in% input$checkbox_bio1){"FS Zone Pct"},
+                                   if("FS Whiff Rate" %in% input$checkbox_bio1){"FS Whiff Rate"},
+                                   if("FS ISO Whiff Rate" %in% input$checkbox_bio1){"FS ISO Whiff Rate"},
+                                   if("FS Zone ISO Whiff Rate" %in% input$checkbox_bio1){"FS Zone ISO Whiff Rate"}), digits = 0)
+    
+  })
+  
+  output$filtered_row <- renderPrint({
+    #temp_df <<- intl_df[, input$checkbox_bio1]
+    input[["playertable_rows_all"]]
+  })
+  output$ldown <- downloadHandler(
+    filename = function() { paste("Filtered_International_Leaderboard-", Sys.Date(), ".csv", sep = "")},
+    content = function(file){
+      write.csv(intl_df[input[["playertable_rows_all"]], c("Player", "Date Recorded", input$checkbox_bio1) ], file, row.names = FALSE)
+    })
+  
+  #METRIC PERCENTILES CHECKBOX
+  output$checkbox_bio4 <- renderUI({
+    if("Player Data" %in% input$cond_bio4){Player1 <- Player_Columns}
+    if("Hitter Rap Per%" %in% input$cond_bio4){Rap1 <- Rap_Percentile_Columns}
+    if("Hitter TM Live Per%" %in% input$cond_bio4){Hitter <- Hitter_TM_Live_Percentile_Columns}
+    if("Hitter TM BP Per%" %in% input$cond_bio4){Hitter1 <- Hitter_TM_BP_Percentile_Columns}
+    if("BM Per%" %in% input$cond_bio4){BM1 <- BM_Percentile_Columns}
+    if("Hitter Workout Per%" %in% input$cond_bio4){HW <- Hitter_Workout_Percentile_Columns}
+    if("Speed Gate Per%" %in% input$cond_bio4){SG1 <- SG_Percentile_Columns}
+    if("Pitcher TM Per%" %in% input$cond_bio4){Pitcher <- TM_Pitcher_Percentile_Columns}
+    if("Pitcher Workout Per%" %in% input$cond_bio4){Pitcher1 <- Pitcher_Workout_Percentile_Columns}
+    awesomeCheckboxGroup("checkbox_bio4", "Select Columns to Display:",
+                         choices = c(Player_Columns, Rap_Percentile_Columns, Hitter_TM_BP_Percentile_Columns, Hitter_TM_Live_Percentile_Columns, BM_Percentile_Columns, Hitter_Workout_Percentile_Columns, SG_Percentile_Columns, TM_Pitcher_Percentile_Columns, Pitcher_Workout_Percentile_Columns),
+                         selected = c(if(exists("Player1")){Player1}, if(exists("Rap1")){Rap1}, if(exists("Hitter")){Hitter}, if(exists("Hitter1")){Hitter1}, if(exists("BM1")){BM1}, if(exists("HW")){HW}, if(exists("SG1")){SG1}, if(exists("Pitcher")){Pitcher}, if(exists("Pitcher1")){Pitcher1}), status = "danger")
+    
+  })
+  
+  
+  #PERCENTILE TABLE
+  output$mytable7 <- DT::renderDataTable({
+    datatable(Percentile_Count[, c("Player",   input$checkbox_bio4), drop = TRUE],
+              filter = 'top', extensions = c("FixedColumns"), options = list(autoWidth = TRUE, scrollX = "TRUE", scrollY = "750px", pageLength = 100, fixedColumns = list(leftColumns = 2),
+                                                                             columnDefs = list(list(className = 'dt-center', targets = 2:(ncol(Percentile_Count[,c("GC Profile", "Player",  input$checkbox_bio4)])-1)))),
+              escape = FALSE, rownames = FALSE, class = 'cell-border display center nowrap compact') %>%
+      formatPercentage(columns = c(if("BM Plane Per%" %in% input$checkbox_bio4){"BM Plane Per%"},
+                                   if("BM Connection Per%" %in% input$checkbox_bio4){"BM Connection Per%"},
+                                   if("BM Peak Power Per%" %in% input$checkbox_bio4){"BM Peak Power Per%"},
+                                   if("BM Max Plane RPMs Per%" %in% input$checkbox_bio4){"BM Max Plane RPMs Per%"},
+                                   if("Total Initial Hand Accel Per%" %in% input$checkbox_bio4){"Total Initial Hand Accel Per%"},
+                                   if("BM Swing Time Per%" %in% input$checkbox_bio4){"BM Swing Time Per%"},
+                                   if("BM DIP Per%" %in% input$checkbox_bio4){"BM DIP Per%"},
+                                   if("Avg Bat Speed Per%" %in% input$checkbox_bio4){"Avg Bat Speed Per%"},
+                                   if("Max Bat Speed Per%" %in% input$checkbox_bio4){"Max Bat Speed Per%"},
+                                   if("Max OF Throw Per%" %in% input$checkbox_bio4){"Max OF Throw Per%"},
+                                   if("Max IF Throw Per%" %in% input$checkbox_bio4){"Max IF Throw Per%"},
+                                   if("Max C Throw Per%" %in% input$checkbox_bio4){"Max C Throw Per%"},
+                                   if("Avg C POP Per%" %in% input$checkbox_bio4){"Avg C POP Per%"},
+                                   if("Max Run and Gun Per%" %in% input$checkbox_bio4){"Max Run and Gun Per%"},
+                                   if("Avg Run and Gun Per%" %in% input$checkbox_bio4){"Avg Run and Gun Per%"},
+                                   if("Max Step and Throw Per%" %in% input$checkbox_bio4){"Max Step and Throw Per%"},
+                                   if("Avg Step and Throw Per%" %in% input$checkbox_bio4){"Avg Step and Throw Per%"},
+                                   if("Max Broad Jump Per%" %in% input$checkbox_bio4){"Max Broad Jump Per%"},
+                                   if("Avg Broad Jump Per%" %in% input$checkbox_bio4){"Avg Broad Jump Per%"},
+                                   if("Max FB Per%" %in% input$checkbox_bio4){"Max FB Per%"},
+                                   if("Avg FB Per%" %in% input$checkbox_bio4){"Avg FB Per%"},
+                                   if("Min FB Per%" %in% input$checkbox_bio4){"Min FB Per%"},
+                                   if("Max CB Per%" %in% input$checkbox_bio4){"Max CB Per%"},
+                                   if("Avg CB Per%" %in% input$checkbox_bio4){"Avg CB Per%"},
+                                   if("Min CB Per%" %in% input$checkbox_bio4){"Min CB Per%"},
+                                   if("Max SL Per%" %in% input$checkbox_bio4){"Max SL Per%"},
+                                   if("Avg SL Per%" %in% input$checkbox_bio4){"Avg SL Per%"},
+                                   if("Min SL Per%" %in% input$checkbox_bio4){"Min SL Per%"},
+                                   if("Max CH Per%" %in% input$checkbox_bio4){"Max CH Per%"},
+                                   if("Avg CH Per%" %in% input$checkbox_bio4){"Avg CH Per%"},
+                                   if("Min CH Per%" %in% input$checkbox_bio4){"Min CH Per%"},
+                                   if("Max SP Per%" %in% input$checkbox_bio4){"Max SP Per%"},
+                                   if("Avg SP Per%" %in% input$checkbox_bio4){"Avg SP Per%"},
+                                   if("Min SP Per%" %in% input$checkbox_bio4){"Min SP Per%"},
+                                   if("Max OT Per%" %in% input$checkbox_bio4){"Max OT Per%"},
+                                   if("Avg OT Per%" %in% input$checkbox_bio4){"Avg OT Per%"},
+                                   if("Min OT Per%" %in% input$checkbox_bio4){"Min OT Per%"},
+                                   if("RAP Barrel % Per%" %in% input$checkbox_bio4){"RAP Barrel % Per%"},
+                                   if("RAP Contacts Per%" %in% input$checkbox_bio4){"RAP Contacts Per%"},
+                                   if("RAP Avg EV Per%" %in% input$checkbox_bio4){"RAP Avg EV Per%"},
+                                   #if("RAP 90 EV % Per%" %in% input$checkbox_bio4){"RAP 90 EV % Per%"},
+                                   if("RAP Weak EV % Per%" %in% input$checkbox_bio4){"RAP Weak EV % Per%"},
+                                   if("RAP Launch % Per%" %in% input$checkbox_bio4){"RAP Launch % Per%"},
+                                   if("RAP Avg Launch Angle Per%" %in% input$checkbox_bio4){"RAP Avg Launch Angle Per%"},
+                                   if("RAP Avg Horz Angle Per%" %in% input$checkbox_bio4){"RAP Avg Horz Angle Per%"},
+                                   if("RAP LF Rate Per%" %in% input$checkbox_bio4){"RAP LF Rate Per%"},
+                                   if("RAP CF Rate Per%" %in% input$checkbox_bio4){"RAP CF Rate Per%"},
+                                   if("RAP RF Rate Per%" %in% input$checkbox_bio4){"RAP RF Rate Per%"},
+                                   if("RAP Max EV Per%" %in% input$checkbox_bio4){"RAP Max EV Per%"},
+                                   #if("RAP 90MPH Equiv EV Per%" %in% input$checkbox_bio4){"RAP 90MPH Equiv EV Per%"},
+                                   #if("RAP Max Distance Per%" %in% input$checkbox_bio4){"RAP Max Distance Per%"},
+                                   #if("RAP Avg Distance Per%" %in% input$checkbox_bio4){"RAP Avg Distance Per%"},
+                                   if("RAP Ground Ball % Per%" %in% input$checkbox_bio4){"RAP Ground Ball % Per%"},
+                                   if("RAP Line Drive % Per%" %in% input$checkbox_bio4){"RAP Line Drive % Per%"},
+                                   if("RAP Fly Ball % Per%" %in% input$checkbox_bio4){"RAP Fly Ball % Per%"},
+                                   if("RAP Pop Up % Per%" %in% input$checkbox_bio4){"RAP Pop Up % Per%"},
+                                   if("SG Max 10yd Per%" %in% input$checkbox_bio4){"SG Max 10yd Per%"},
+                                   if("SG Avg 10yd Per%" %in% input$checkbox_bio4){"SG Avg 10yd Per%"},
+                                   if("SG Max 30yd Per%" %in% input$checkbox_bio4){"SG Max 30yd Per%"},
+                                   if("SG Avg 30yd Per%" %in% input$checkbox_bio4){"SG Avg 30yd Per%"},
+                                   if("TM BP Contacts Per%" %in% input$checkbox_bio4){"TM BP Contacts Per%"},
+                                   if("TM BP Avg UEV Per%" %in% input$checkbox_bio4){"TM BP Avg UEV Per%"},
+                                   if("TM BP Max UEV Per%" %in% input$checkbox_bio4){"TM BP Max UEV Per%"},
+                                   if("TM BP Avg UEV vs 90mph Per%" %in% input$checkbox_bio4){"TM BP Avg UEV vs 90mph Per%"},
+                                   if("TM BP Max UEV vs 90mph Per%" %in% input$checkbox_bio4){"TM BP Max UEV vs 90mph Per%"},
+                                   if("TM BP Avg EV Per%" %in% input$checkbox_bio4){"TM BP Avg EV Per%"},
+                                   if("TM BP Max EV Per%" %in% input$checkbox_bio4){"TM BP Max EV Per%"},
+                                   if("TM BP Avg EV vs 90mph Per%" %in% input$checkbox_bio4){"TM BP Avg EV vs 90mph Per%"},
+                                   if("TM BP Max EV vs 90mph Per%" %in% input$checkbox_bio4){"TM BP Max EV vs 90mph Per%"},
+                                   if("TM BP Avg Launch Angle Per%" %in% input$checkbox_bio4){"TM BP Avg Launch Angle Per%"},
+                                   if("TM BP Avg Horz Angle Per%" %in% input$checkbox_bio4){"TM BP Avg Horz Angle Per%"},
+                                   if("TM BP GB % Per%" %in% input$checkbox_bio4){"TM BP GB % Per%"},
+                                   if("TM BP LD % Per%" %in% input$checkbox_bio4){"TM BP LD % Per%"},
+                                   if("TM BP Fly Ball % Per%" %in% input$checkbox_bio4){"TM BP Fly Ball % Per%"},
+                                   if("TM BP Pop Up % Per%" %in% input$checkbox_bio4){"TM BP Pop Up % Per%"},
+                                   if("TM BP LF % Per%" %in% input$checkbox_bio4){"TM BP LF % Per%"},
+                                   if("TM BP CF % Per%" %in% input$checkbox_bio4){"TM BP CF % Per%"},
+                                   if("TM BP RF % Per%" %in% input$checkbox_bio4){"TM BP RF % Per%"},
+                                   if("TM Live PA Per%" %in% input$checkbox_bio4){"TM Live PA Per%"},
+                                   if("TM Live Contacts Per%" %in% input$checkbox_bio4){"TM Live Contacts Per%"},
+                                   if("TM Live BIP Per%" %in% input$checkbox_bio4){"TM Live BIP Per%"},
+                                   if("TM Live Swing Decs Per%" %in% input$checkbox_bio4){"TM Live Swing Decs Per%"},
+                                   if("TM Live Swing % Per%" %in% input$checkbox_bio4){"TM Live Swing % Per%"},
+                                   if("TM Live Chase % Per%" %in% input$checkbox_bio4){"TM Live Chase % Per%"},
+                                   if("TM Live inZ Swing % Per%" %in% input$checkbox_bio4){"TM Live inZ Swing % Per%"},
+                                   if("TM Live Contact % Per%" %in% input$checkbox_bio4){"TM Live Contact % Per%"},
+                                   if("TM Live SwStr % Per%" %in% input$checkbox_bio4){"TM Live SwStr % Per%"},
+                                   if("TM Live InZ Contact % Per%" %in% input$checkbox_bio4){"TM Live InZ Contact % Per%"},
+                                   if("FF Thrown Per%" %in% input$checkbox_bio4){"FF Thrown Per%"},
+                                   if("Avg FF Velo Per%" %in% input$checkbox_bio4){"Avg FF Velo Per%"},
+                                   if("Avg FF Spin Rate Per%" %in% input$checkbox_bio4){"Avg FF Spin Rate Per%"},
+                                   if("Avg FF Spin Direction Per%" %in% input$checkbox_bio4){"Avg FF Spin Direction Per%"},
+                                   if("Avg FF Induced Vert. Break Per%" %in% input$checkbox_bio4){"Avg FF Induced Vert. Break Per%"},
+                                   if("Avg FF Horz. Break Per%" %in% input$checkbox_bio4){"Avg FF Horz. Break Per%"},
+                                   if("Avg FF RelVel Grade Per%" %in% input$checkbox_bio4){"Avg FF RelVel Grade Per%"},
+                                   if("Avg FF RelVelLoc Grade Per%" %in% input$checkbox_bio4){"Avg FF RelVelLoc Grade Per%"},
+                                   if("Max FF Release Z Per%" %in% input$checkbox_bio4){"Max FF Release Z Per%"},
+                                   if("Avg FF Release Z Per%" %in% input$checkbox_bio4){"Avg FF Release Z Per%"},
+                                   if("Max FF Release X Per%" %in% input$checkbox_bio4){"Max FF Release X Per%"},
+                                   if("Avg FF Release X Per%" %in% input$checkbox_bio4){"Avg FF Release X Per%"},
+                                   if("Avg FF Extension Per%" %in% input$checkbox_bio4){"Avg FF Extension Per%"},
+                                   if("FF Zone Pct Per%" %in% input$checkbox_bio4){"FF Zone Pct Per%"},
+                                   if("FF Whiff Rate Per%" %in% input$checkbox_bio4){"FF Whiff Rate Per%"},
+                                   if("FF ISO Whiff Rate Per%" %in% input$checkbox_bio4){"FF ISO Whiff Rate Per%"},
+                                   if("FF Zone ISO Whiff Rate Per%" %in% input$checkbox_bio4){"FF Zone ISO Whiff Rate Per%"},
+                                   if("FT Thrown Per%" %in% input$checkbox_bio4){"FT Thrown Per%"},
+                                   if("Avg FT Velo Per%" %in% input$checkbox_bio4){"Avg FT Velo Per%"},
+                                   if("Avg FT Spin Rate Per%" %in% input$checkbox_bio4){"Avg FT Spin Rate Per%"},
+                                   if("Avg FT Spin Direction Per%" %in% input$checkbox_bio4){"Avg FT Spin Direction Per%"},
+                                   if("Avg FT Induced Vert. Break Per%" %in% input$checkbox_bio4){"Avg FT Induced Vert. Break Per%"},
+                                   if("Avg FT Horz. Break Per%" %in% input$checkbox_bio4){"Avg FT Horz. Break Per%"},
+                                   if("Avg FT RelVel Grade Per%" %in% input$checkbox_bio4){"Avg FT RelVel Grade Per%"},
+                                   if("Avg FT RelVelLoc Grade Per%" %in% input$checkbox_bio4){"Avg FT RelVelLoc Grade Per%"},
+                                   if("Max FT Release Z Per%" %in% input$checkbox_bio4){"Max FT Release Z Per%"},
+                                   if("Avg FT Release Z Per%" %in% input$checkbox_bio4){"Avg FT Release Z Per%"},
+                                   if("Max FT Release X Per%" %in% input$checkbox_bio4){"Max FT Release X Per%"},
+                                   if("Avg FT Release X Per%" %in% input$checkbox_bio4){"Avg FT Release X Per%"},
+                                   if("Avg FT Extension Per%" %in% input$checkbox_bio4){"Avg FT Extension Per%"},
+                                   if("FT Zone Pct Per%" %in% input$checkbox_bio4){"FT Zone Pct Per%"},
+                                   if("FT Whiff Rate Per%" %in% input$checkbox_bio4){"FT Whiff Rate Per%"},
+                                   if("FT ISO Whiff Rate Per%" %in% input$checkbox_bio4){"FT ISO Whiff Rate Per%"},
+                                   if("FT Zone ISO Whiff Rate Per%" %in% input$checkbox_bio4){"FT Zone ISO Whiff Rate Per%"},
+                                   if("FC Thrown Per%" %in% input$checkbox_bio4){"FC Thrown Per%"},
+                                   if("Avg FC Velo Per%" %in% input$checkbox_bio4){"Avg FC Velo Per%"},
+                                   if("Avg FC Spin Rate Per%" %in% input$checkbox_bio4){"Avg FC Spin Rate Per%"},
+                                   if("Avg FC Spin Direction Per%" %in% input$checkbox_bio4){"Avg FC Spin Direction Per%"},
+                                   if("Avg FC Induced Vert. Break Per%" %in% input$checkbox_bio4){"Avg FC Induced Vert. Break Per%"},
+                                   if("Avg FC Horz. Break Per%" %in% input$checkbox_bio4){"Avg FC Horz. Break Per%"},
+                                   if("Avg FC RelVel Grade Per%" %in% input$checkbox_bio4){"Avg FC RelVel Grade Per%"},
+                                   if("Avg FC RelVelLoc Grade Per%" %in% input$checkbox_bio4){"Avg FC RelVelLoc Grade Per%"},
+                                   if("Max FC Release Z Per%" %in% input$checkbox_bio4){"Max FC Release Z Per%"},
+                                   if("Avg FC Release Z Per%" %in% input$checkbox_bio4){"Avg FC Release Z Per%"},
+                                   if("Max FC Release X Per%" %in% input$checkbox_bio4){"Max FC Release X Per%"},
+                                   if("Avg FC Release X Per%" %in% input$checkbox_bio4){"Avg FC Release X Per%"},
+                                   if("Avg FC Extension Per%" %in% input$checkbox_bio4){"Avg FC Extension Per%"},
+                                   if("FC Zone Pct Per%" %in% input$checkbox_bio4){"FC Zone Pct Per%"},
+                                   if("FC Whiff Rate Per%" %in% input$checkbox_bio4){"FC Whiff Rate Per%"},
+                                   if("FC ISO Whiff Rate Per%" %in% input$checkbox_bio4){"FC ISO Whiff Rate Per%"},
+                                   if("FC Zone ISO Whiff Rate Per%" %in% input$checkbox_bio4){"FC Zone ISO Whiff Rate Per%"},
+                                   if("CU Thrown Per%" %in% input$checkbox_bio4){"CU Thrown Per%"},
+                                   if("Avg CU Velo Per%" %in% input$checkbox_bio4){"Avg CU Velo Per%"},
+                                   if("Avg CU Spin Rate Per%" %in% input$checkbox_bio4){"Avg CU Spin Rate Per%"},
+                                   if("Avg CU Spin Direction Per%" %in% input$checkbox_bio4){"Avg CU Spin Direction Per%"},
+                                   if("Avg CU Induced Vert. Break Per%" %in% input$checkbox_bio4){"Avg CU Induced Vert. Break Per%"},
+                                   if("Avg CU Horz. Break Per%" %in% input$checkbox_bio4){"Avg CU Horz. Break Per%"},
+                                   if("Avg CU RelVel Grade Per%" %in% input$checkbox_bio4){"Avg CU RelVel Grade Per%"},
+                                   if("Avg CU RelVelLoc Grade Per%" %in% input$checkbox_bio4){"Avg CU RelVelLoc Grade Per%"},
+                                   if("Max CU Release Z Per%" %in% input$checkbox_bio4){"Max CU Release Z Per%"},
+                                   if("Avg CU Release Z Per%" %in% input$checkbox_bio4){"Avg CU Release Z Per%"},
+                                   if("Max CU Release X Per%" %in% input$checkbox_bio4){"Max CU Release X Per%"},
+                                   if("Avg CU Release X Per%" %in% input$checkbox_bio4){"Avg CU Release X Per%"},
+                                   if("Avg CU Extension Per%" %in% input$checkbox_bio4){"Avg CU Extension Per%"},
+                                   if("CU Zone Pct Per%" %in% input$checkbox_bio4){"CU Zone Pct Per%"},
+                                   if("CU Whiff Rate Per%" %in% input$checkbox_bio4){"CU Whiff Rate Per%"},
+                                   if("CU ISO Whiff Rate Per%" %in% input$checkbox_bio4){"CU ISO Whiff Rate Per%"},
+                                   if("CU Zone ISO Whiff Rate Per%" %in% input$checkbox_bio4){"CU Zone ISO Whiff Rate Per%"},
+                                   if("SL Thrown Per%" %in% input$checkbox_bio4){"SL Thrown Per%"},
+                                   if("Avg SL Velo Per%" %in% input$checkbox_bio4){"Avg SL Velo Per%"},
+                                   if("Avg SL Spin Rate Per%" %in% input$checkbox_bio4){"Avg SL Spin Rate Per%"},
+                                   if("Avg SL Spin Direction Per%" %in% input$checkbox_bio4){"Avg SL Spin Direction Per%"},
+                                   if("Avg SL Induced Vert. Break Per%" %in% input$checkbox_bio4){"Avg SL Induced Vert. Break Per%"},
+                                   if("Avg SL Horz. Break Per%" %in% input$checkbox_bio4){"Avg SL Horz. Break Per%"},
+                                   if("Avg SL RelVel Grade Per%" %in% input$checkbox_bio4){"Avg SL RelVel Grade Per%"},
+                                   if("Avg SL RelVelLoc Grade Per%" %in% input$checkbox_bio4){"Avg SL RelVelLoc Grade Per%"},
+                                   if("Max SL Release Z Per%" %in% input$checkbox_bio4){"Max SL Release Z Per%"},
+                                   if("Avg SL Release Z Per%" %in% input$checkbox_bio4){"Avg SL Release Z Per%"},
+                                   if("Max SL Release X Per%" %in% input$checkbox_bio4){"Max SL Release X Per%"},
+                                   if("Avg SL Release X Per%" %in% input$checkbox_bio4){"Avg SL Release X Per%"},
+                                   if("Avg SL Extension Per%" %in% input$checkbox_bio4){"Avg SL Extension Per%"},
+                                   if("SL Zone Pct Per%" %in% input$checkbox_bio4){"SL Zone Pct Per%"},
+                                   if("SL Whiff Rate Per%" %in% input$checkbox_bio4){"SL Whiff Rate Per%"},
+                                   if("SL ISO Whiff Rate Per%" %in% input$checkbox_bio4){"SL ISO Whiff Rate Per%"},
+                                   if("SL Zone ISO Whiff Rate Per%" %in% input$checkbox_bio4){"SL Zone ISO Whiff Rate Per%"},
+                                   if("CH Thrown Per%" %in% input$checkbox_bio4){"CH Thrown Per%"},
+                                   if("Avg CH Velo Per%" %in% input$checkbox_bio4){"Avg CH Velo Per%"},
+                                   if("Avg CH Spin Rate Per%" %in% input$checkbox_bio4){"Avg CH Spin Rate Per%"},
+                                   if("Avg CH Spin Direction Per%" %in% input$checkbox_bio4){"Avg CH Spin Direction Per%"},
+                                   if("Avg CH Induced Vert. Break Per%" %in% input$checkbox_bio4){"Avg CH Induced Vert. Break Per%"},
+                                   if("Avg CH Horz. Break Per%" %in% input$checkbox_bio4){"Avg CH Horz. Break Per%"},
+                                   if("Avg CH RelVel Grade Per%" %in% input$checkbox_bio4){"Avg CH RelVel Grade Per%"},
+                                   if("Avg CH RelVelLoc Grade Per%" %in% input$checkbox_bio4){"Avg CH RelVelLoc Grade Per%"},
+                                   if("Max CH Release Z Per%" %in% input$checkbox_bio4){"Max CH Release Z Per%"},
+                                   if("Avg CH Release Z Per%" %in% input$checkbox_bio4){"Avg CH Release Z Per%"},
+                                   if("Max CH Release X Per%" %in% input$checkbox_bio4){"Max CH Release X Per%"},
+                                   if("Avg CH Release X Per%" %in% input$checkbox_bio4){"Avg CH Release X Per%"},
+                                   if("Avg CH Extension Per%" %in% input$checkbox_bio4){"Avg CH Extension Per%"},
+                                   if("CH Zone Pct Per%" %in% input$checkbox_bio4){"CH Zone Pct Per%"},
+                                   if("CH Whiff Rate Per%" %in% input$checkbox_bio4){"CH Whiff Rate Per%"},
+                                   if("CH ISO Whiff Rate Per%" %in% input$checkbox_bio4){"CH ISO Whiff Rate Per%"},
+                                   if("CH Zone ISO Whiff Rate Per%" %in% input$checkbox_bio4){"CH Zone ISO Whiff Rate Per%"},
+                                   if("FS Thrown Per%" %in% input$checkbox_bio4){"FS Thrown Per%"},
+                                   if("Avg FS Velo Per%" %in% input$checkbox_bio4){"Avg FS Velo Per%"},
+                                   if("Avg FS Spin Rate Per%" %in% input$checkbox_bio4){"Avg FS Spin Rate Per%"},
+                                   if("Avg FS Spin Direction Per%" %in% input$checkbox_bio4){"Avg FS Spin Direction Per%"},
+                                   if("Avg FS Induced Vert. Break Per%" %in% input$checkbox_bio4){"Avg FS Induced Vert. Break Per%"},
+                                   if("Avg FS Horz. Break Per%" %in% input$checkbox_bio4){"Avg FS Horz. Break Per%"},
+                                   if("Avg FS RelVel Grade Per%" %in% input$checkbox_bio4){"Avg FS RelVel Grade Per%"},
+                                   if("Avg FS RelVelLoc Grade Per%" %in% input$checkbox_bio4){"Avg FS RelVelLoc Grade Per%"},
+                                   if("Max FS Release Z Per%" %in% input$checkbox_bio4){"Max FS Release Z Per%"},
+                                   if("Avg FS Release Z Per%" %in% input$checkbox_bio4){"Avg FS Release Z Per%"},
+                                   if("Max FS Release X Per%" %in% input$checkbox_bio4){"Max FS Release X Per%"},
+                                   if("Avg FS Release X Per%" %in% input$checkbox_bio4){"Avg FS Release X Per%"},
+                                   if("Avg FS Extension Per%" %in% input$checkbox_bio4){"Avg FS Extension Per%"},
+                                   if("FS Zone Pct Per%" %in% input$checkbox_bio4){"FS Zone Pct Per%"},
+                                   if("FS Whiff Rate Per%" %in% input$checkbox_bio4){"FS Whiff Rate Per%"},
+                                   if("FS ISO Whiff Rate Per%" %in% input$checkbox_bio4){"FS ISO Whiff Rate Per%"},
+                                   if("FS Zone ISO Whiff Rate Per%" %in% input$checkbox_bio4){"FS Zone ISO Whiff Rate Per%"}), digits = 0)
+    
+  })
+  
+  output$filtered_row1 <- renderPrint({
+    input[["mytable7_rows_all"]]
+  })
+  output$pdown <- downloadHandler(
+    filename = function() { paste("Filtered_International_Per%-", Sys.Date(), ".csv", sep = "")},
+    content = function(file){
+      write.csv(Percentile_Count[input[["mytable7_rows_all"]], c("Player", input$checkbox_bio4) ], file, row.names = FALSE)
+    })
+  
+  #PLAYER COMPARE CHECKBOX
+  output$checkbox_bio2 <- renderUI({
+    if("Player Data" %in% input$cond_bio2){Player <- Player_data_columns}
+    if("Scout Follows" %in% input$cond_bio2){Scout <- Scout_Follows_columns}
+    if("Hitter Workout Data" %in% input$cond_bio2){Workout_h <- Hitter_Workout_columns}
+    if("Pitcher Workout Data" %in% input$cond_bio2){Workout_p <- Pitcher_Workout_columns}
+    if("Pitcher TM Data" %in% input$cond_bio2){TM_p <- TM_Pitcher_columns}
+    if("Hitter Rapsodo Data" %in% input$cond_bio2){Rapsodo <- RAP_columns}
+    if("Blast Motion Data" %in% input$cond_bio2){BM <- BM_columns}
+    if("Hitter TM BP Data" %in% input$cond_bio2){TMB <- TM_BP_columns}
+    if("Hitter TM Live Data" %in% input$cond_bio2){TML <- TM_Live_columns}
+    if("Speed Gates" %in% input$cond_bio2){SG <- SG_columns}
+    awesomeCheckboxGroup("checkbox_bio2", "Select Columns to Display:",
+                         choices = c( "Age Recorded", Player_data_columns, Scout_Follows_columns, RAP_columns, TM_Live_columns, TM_BP_columns, BM_columns, Hitter_Workout_columns, SG_columns, Pitcher_Workout_columns, TM_Pitcher_columns),
+                         selected = c("Date Recorded", if(exists("Player")){Player}, if(exists("Scout")){Scout}, if(exists("Workout_h")){Workout_h}, if(exists("Workout_p")){Workout_p}, if(exists("TM_p")){TM_p},if(exists("Rapsodo")){Rapsodo}, if(exists("BM")){BM},
+                                      if(exists("SG")){SG}, if(exists("TML")){TML}, if(exists("TMB")){TMB}), status = "danger")
+  })
+  
+  
+  #PLAYER COMPARE TABLE 
+  
+  output$mytable5 <- DT::renderDataTable({
+    intl4 <- Player_Compare[ Player_Compare$Player  %in% input$choose ,]
+    DT::datatable(intl4[, c( "Player", "Player Type", "Date Recorded", input$checkbox_bio2), drop = TRUE],  filter = 'top', extensions = c("FixedColumns"), 
+                  options = list(autoWidth = TRUE, scrollX = "TRUE", scrollY = "750px", pageLength = 100, fixedColumns = list(leftColumns = 2),
+                                 columnDefs = list(list(className = 'dt-center', targets = 2:(ncol(intl_df[,c("GC Profile", "Player",  input$checkbox_bio2)])-1))),  lengthMenu = c(25, 50, 100, 250)),
+                  escape = FALSE, rownames = FALSE, class = 'cell-border display center nowrap compact') %>%
+      formatPercentage(columns = c(if("RAP Weak EV %"  %in% input$checkbox_bio2){"RAP Weak EV %" },
+                                   if("Rap Launch %"  %in% input$checkbox_bio2){"Rap Launch %" },
+                                   if("RAP Barrel %"  %in% input$checkbox_bio2){"RAP Barrel %" },
+                                   if("RAP Ground Ball %"  %in% input$checkbox_bio2){"RAP Ground Ball %" },
+                                   if("RAP Line Drive %"  %in% input$checkbox_bio2){"RAP Line Drive %" },
+                                   if("RAP Fly Ball %"  %in% input$checkbox_bio2){"RAP Fly Ball %" },
+                                   if("RAP Pop Up %"  %in% input$checkbox_bio2){"RAP Pop Up %" },
+                                   if("RAP LF Rate"  %in% input$checkbox_bio2){"RAP LF Rate" },
+                                   if("RAP CF Rate"  %in% input$checkbox_bio2){"RAP CF Rate" },
+                                   if("RAP RF Rate"  %in% input$checkbox_bio2){"RAP RF Rate" },
+                                   if("TM BP Launch %" %in% input$checkbox_bio2){"TM BP Launch %"},
+                                   if("TM BP Weak EV %" %in% input$checkbox_bio2){"TM BP Weak EV %"},
+                                   if("TM BP Barrel %" %in% input$checkbox_bio2){"TM BP Barrel %"},
+                                   if("TM BP GB %" %in% input$checkbox_bio2){"TM BP GB %"},
+                                   if("TM BP LD %" %in% input$checkbox_bio2){"TM BP LD %"},
+                                   if("TM BP Fly Ball %" %in% input$checkbox_bio2){"TM BP Fly Ball %"},
+                                   if("TM BP Pop Up %" %in% input$checkbox_bio2){"TM BP Pop Up %"},
+                                   if("TM BP LF %" %in% input$checkbox_bio2){"TM BP LF %"},
+                                   if("TM BP CF %" %in% input$checkbox_bio2){"TM BP CF %"},
+                                   if("TM BP RF %" %in% input$checkbox_bio2){"TM BP RF %"},
+                                   if("TM Live Swing %" %in% input$checkbox_bio2){"TM Live Swing %"},
+                                   if("TM Live Chase %" %in% input$checkbox_bio2){"TM Live Chase %"},
+                                   if("TM Live inZ Swing %" %in% input$checkbox_bio2){"TM Live inZ Swing %"},
+                                   if("TM Live Contact %" %in% input$checkbox_bio2){"TM Live Contact %"},
+                                   if("TM Live SwStr %" %in% input$checkbox_bio2){"TM Live SwStr %"},
+                                   if("TM Live InZ Contact %" %in% input$checkbox_bio2){"TM Live InZ Contact %"},
+                                   if("FF Zone Pct" %in% input$checkbox_bio2){"FF Zone Pct"},
+                                   if("FF Whiff Rate" %in% input$checkbox_bio2){"FF Whiff Rate"},
+                                   if("FF ISO Whiff Rate" %in% input$checkbox_bio2){"FF ISO Whiff Rate"},
+                                   if("FF Zone ISO Whiff Rate" %in% input$checkbox_bio2){"FF Zone ISO Whiff Rate"},
+                                   if("FT Zone Pct" %in% input$checkbox_bio2){"FT Zone Pct"},
+                                   if("FT Whiff Rate" %in% input$checkbox_bio2){"FT Whiff Rate"},
+                                   if("FT ISO Whiff Rate" %in% input$checkbox_bio2){"FT ISO Whiff Rate"},
+                                   if("FT Zone ISO Whiff Rate" %in% input$checkbox_bio2){"FT Zone ISO Whiff Rate"},
+                                   if("FC Zone Pct" %in% input$checkbox_bio2){"FC Zone Pct"},
+                                   if("FC Whiff Rate" %in% input$checkbox_bio2){"FC Whiff Rate"},
+                                   if("FC ISO Whiff Rate" %in% input$checkbox_bio2){"FC ISO Whiff Rate"},
+                                   if("FC Zone ISO Whiff Rate" %in% input$checkbox_bio2){"FC Zone ISO Whiff Rate"},
+                                   if("CU Zone Pct" %in% input$checkbox_bio2){"CU Zone Pct"},
+                                   if("CU Whiff Rate" %in% input$checkbox_bio2){"CU Whiff Rate"},
+                                   if("CU ISO Whiff Rate" %in% input$checkbox_bio2){"CU ISO Whiff Rate"},
+                                   if("CU Zone ISO Whiff Rate" %in% input$checkbox_bio2){"CU Zone ISO Whiff Rate"},
+                                   if("SL Zone Pct" %in% input$checkbox_bio2){"SL Zone Pct"},
+                                   if("SL Whiff Rate" %in% input$checkbox_bio2){"SL Whiff Rate"},
+                                   if("SL ISO Whiff Rate" %in% input$checkbox_bio2){"SL ISO Whiff Rate"},
+                                   if("SL Zone ISO Whiff Rate" %in% input$checkbox_bio2){"SL Zone ISO Whiff Rate"},
+                                   if("CH Zone Pct" %in% input$checkbox_bio2){"CH Zone Pct"},
+                                   if("CH Whiff Rate" %in% input$checkbox_bio2){"CH Whiff Rate"},
+                                   if("CH ISO Whiff Rate" %in% input$checkbox_bio2){"CH ISO Whiff Rate"},
+                                   if("CH Zone ISO Whiff Rate" %in% input$checkbox_bio2){"CH Zone ISO Whiff Rate"},
+                                   if("FS Zone Pct" %in% input$checkbox_bio2){"FS Zone Pct"},
+                                   if("FS Whiff Rate" %in% input$checkbox_bio2){"FS Whiff Rate"},
+                                   if("FS ISO Whiff Rate" %in% input$checkbox_bio2){"FS ISO Whiff Rate"},
+                                   if("FS Zone ISO Whiff Rate" %in% input$checkbox_bio2){"FS Zone ISO Whiff Rate"}), digits = 0)
+    
+    
+  })
+  
+  output$mytable44 <- DT::renderDataTable({
+    DT::datatable(P_Count, options = list(autoWidth = TRUE, fixedColumns = list(leftColumns = 2),  scrollX = "TRUE", scrollY = "750px"), extensions = c("FixedColumns"), class = 'cell-border display center nowrap compact')})
+  
+  
+}
+
+shinyApp(ui, server)
