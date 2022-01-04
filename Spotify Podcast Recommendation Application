@@ -24,7 +24,6 @@ cluster.name <- "cluster"
 
 
 df$episode_uri <- paste0("<a href= ", df$episode_uri)
-#$`GC Profile` <- paste0("<a href='","https://dbgc.astros.com/IntlScout/Player?player_guid=", intl_df$`GC Profile`,"' target='_blank'>", "GC Profile","</a>")
 
 #shiny app
 
